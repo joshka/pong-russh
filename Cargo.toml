@@ -1,0 +1,16 @@
+[package]
+name = "pong-russh"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+color-eyre = "0.6.3"
+crossterm = "0.27.0"
+ratatui = "0.26.1"
+russh = "0.43.0"
+scopeguard = "1.2.0"
+
+[patch.crates-io]
+ratatui = { path = "../ratatui" }
