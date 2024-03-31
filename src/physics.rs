@@ -21,11 +21,11 @@ impl Point {
     /// Screen coordinates are in the range [0, width] and [0, height].
     pub fn to_screen(&self, area: Rect) -> Position {
         // ensure that the resulting position is within the screen bounds
-        let max_width = (area.width - 1) as f32;
-        let max_height = (area.height - 1) as f32;
+        let max_width = (area.width.saturating_sub(1)) as f32;
+        let max_height = (area.height.saturating_sub(1)) as f32;
         Position {
-            x: (self.x * max_width) as u16,
-            y: (self.y * max_height) as u16,
+            x: (self.x * max_width) as u16 + area.x,
+            y: (self.y * max_height) as u16 + area.y,
         }
     }
 }

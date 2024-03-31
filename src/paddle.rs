@@ -36,18 +36,18 @@ impl Widget for &Paddle {
         // use block characters that represent 1/8th of a cell to draw the paddles
         const TOP_BARS: [&str; 9] = ["█", "▇", "▆", "▅", "▄", "▃", "▂", "▁", " "];
         const BOTTOM_BARS: [&str; 9] = [" ", "▔", "🮂", "🮃", "▀", "🮄", "🮅", "🮆", "█"];
-        let x = (self.pos.x * (area.width - 1) as f32) as u16;
+        let x = (self.pos.x * (area.width.saturating_sub(1)) as f32) as u16 + area.x;
         let top = (self.pos.y - Paddle::HEIGHT / 2.0) * area.height as f32;
         let bottom = (self.pos.y + Paddle::HEIGHT / 2.0) * area.height as f32;
         // draw the top character of the paddle by taking the fractional part of the top position
         let index = (top.fract() * 8.0).round() as usize;
         let top_char = TOP_BARS[index];
-        let top = top as u16;
+        let top = top as u16 + area.y;
         buf.set_string(x, top, top_char, Style::default());
         // draw the bottom character of the paddle by taking the fractional part of the bottom position
         let index = (bottom.fract() * 8.0).round() as usize;
         let bottom_char = BOTTOM_BARS[index];
-        let bottom = bottom as u16;
+        let bottom = bottom as u16 + area.y;
         buf.set_string(x, bottom, bottom_char, Style::default());
 
         // fill in the middle of the paddle with block characters

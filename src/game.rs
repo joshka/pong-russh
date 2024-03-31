@@ -1,77 +1,117 @@
 use std::time::{Duration, Instant};
 
-use crossterm::event::KeyCode;
-use ratatui::prelude::*;
+use color_eyre::eyre::bail;
+use ratatui::{
+    prelude::*,
+    widgets::{Block, Clear, WidgetRef},
+};
+use tracing::info;
 
-use crate::{ball::Ball, events, paddle::Paddle, tui::Tui};
+use crate::{ball::Ball, paddle::Paddle, SshTerminal};
 
 #[derive(Debug)]
 pub struct Game {
     ball: Ball,
-    player1: Paddle,
-    player2: Paddle,
-    exit: bool,
+    left_paddle: Paddle,
+    right_paddle: Paddle,
     score: (u32, u32),
     serve_time: Option<Instant>,
     last_update: Option<Instant>,
+    clients: [Option<usize>; 2],
+    terminal_sizes: [Rect; 2],
 }
 
 impl Game {
     // Wait for a fixed duration before serving the ball
     const SERVE_DURATION: Duration = Duration::from_millis(1500);
 
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             ball: Ball::new(),
-            player1: Paddle::new(0.0, 0.5),
-            player2: Paddle::new(1.0, 0.5),
-            exit: false,
+            left_paddle: Paddle::new(0.0, 0.5),
+            right_paddle: Paddle::new(1.0, 0.5),
             score: (0, 0),
             serve_time: None,
             last_update: None,
+            clients: [None, None],
+            terminal_sizes: [Rect::default(), Rect::default()],
         }
     }
 
-    pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        self.serve();
-        while !self.exit {
-            self.draw(tui)?;
-            self.handle_input()?;
-            self.update();
+    pub fn connect_player(&mut self, client_id: usize) -> color_eyre::Result<()> {
+        if self.clients[0].is_none() {
+            info!("Player 1 connected");
+            self.clients[0] = Some(client_id);
+        } else if self.clients[1].is_none() {
+            info!("Player 2 connected");
+            self.clients[1] = Some(client_id);
+        } else {
+            bail!("Game is full");
         }
-        Ok(())
-    }
-
-    fn draw(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
-        tui.draw(|frame| frame.render_widget(&*self, frame.size()))?;
-        Ok(())
-    }
-
-    fn handle_input(&mut self) -> color_eyre::Result<()> {
-        if let Some(key) = events::poll()? {
-            if events::is_quit_key(key) {
-                self.exit = true
-            }
-            match key.code {
-                KeyCode::Char('w') => {
-                    self.player1.move_up();
-                }
-                KeyCode::Char('s') => {
-                    self.player1.move_down();
-                }
-                KeyCode::Up => {
-                    self.player2.move_up();
-                }
-                KeyCode::Down => {
-                    self.player2.move_down();
-                }
-                _ => {}
-            }
+        if self.clients.iter().all(Option::is_some) {
+            info!("Both players connected, starting game");
+            self.score = (0, 0);
+            self.serve();
         }
         Ok(())
     }
 
-    fn update(&mut self) {
+    pub fn disconnect_player(&mut self, client_id: usize) {
+        if let Some(id) = self.clients.iter_mut().find(|id| **id == Some(client_id)) {
+            info!("Player disconnected");
+            *id = None;
+        }
+    }
+
+    pub fn resize(&mut self, client_id: usize, size: Rect) {
+        if self.clients[0]
+            .as_ref()
+            .map_or(false, |id| *id == client_id)
+        {
+            self.terminal_sizes[0] = size;
+        } else if self.clients[1]
+            .as_ref()
+            .map_or(false, |id| *id == client_id)
+        {
+            self.terminal_sizes[1] = size;
+        }
+    }
+
+    pub fn draw(&mut self, terminal: &mut SshTerminal) -> color_eyre::Result<()> {
+        let size = self.terminal_sizes[0].intersection(self.terminal_sizes[1]);
+        terminal.draw(|frame| frame.render_widget_ref(self, size))?;
+        Ok(())
+    }
+
+    pub fn move_up(&mut self, client_id: usize) {
+        if self.clients[0]
+            .as_ref()
+            .map_or(false, |id| *id == client_id)
+        {
+            self.left_paddle.move_up();
+        } else if self.clients[1]
+            .as_ref()
+            .map_or(false, |id| *id == client_id)
+        {
+            self.right_paddle.move_up();
+        }
+    }
+
+    pub fn move_down(&mut self, client_id: usize) {
+        if self.clients[0]
+            .as_ref()
+            .map_or(false, |id| *id == client_id)
+        {
+            self.left_paddle.move_down();
+        } else if self.clients[1]
+            .as_ref()
+            .map_or(false, |id| *id == client_id)
+        {
+            self.right_paddle.move_down();
+        }
+    }
+
+    pub fn update(&mut self) {
         if self
             .serve_time
             .map_or(true, |t| t.elapsed() < Self::SERVE_DURATION)
@@ -80,7 +120,8 @@ impl Game {
         }
         let duration = self.last_update.map_or(Duration::ZERO, |t| t.elapsed());
         self.last_update = Some(Instant::now());
-        self.ball.update(duration, &self.player1, &self.player2);
+        self.ball
+            .update(duration, &self.left_paddle, &self.right_paddle);
 
         if self.ball.pos.x < 0.0 {
             self.score.1 += 1;
@@ -91,20 +132,28 @@ impl Game {
         }
     }
 
-    fn serve(&mut self) {
+    pub fn serve(&mut self) {
+        info!("Serving ball");
         self.ball.serve();
         self.serve_time = Some(Instant::now());
         self.last_update = None;
     }
 }
 
-impl Widget for &Game {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl WidgetRef for &mut Game {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+        let block = Block::bordered()
+            .title("Pong")
+            .title_alignment(Alignment::Center)
+            .style((Color::White, Color::DarkGray));
+        (&block).render(area, buf);
+        let area = block.inner(area);
         Line::from(format!("Score: {} - {}", self.score.0, self.score.1))
             .centered()
             .render(area, buf);
         self.ball.render(area, buf);
-        self.player1.render(area, buf);
-        self.player2.render(area, buf);
+        self.left_paddle.render(area, buf);
+        self.right_paddle.render(area, buf);
     }
 }

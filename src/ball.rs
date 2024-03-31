@@ -94,8 +94,8 @@ impl Widget for &Ball {
         // use block characters that represent 1/8th of a cell to draw the paddles
         const TOP_BARS: [&str; 9] = ["█", "▇", "▆", "▅", "▄", "▃", "▂", "▁", " "];
         const BOTTOM_BARS: [&str; 9] = [" ", "▔", "🮂", "🮃", "▀", "🮄", "🮅", "🮆", "█"];
-        let _x = self.pos.x * (area.width - 1) as f32;
-        let y = self.pos.y * (area.height - 1) as f32;
+        let _x = self.pos.x * (area.width.saturating_sub(1)) as f32;
+        let y = self.pos.y * (area.height.saturating_sub(1)) as f32;
         // draw the top character of the paddle by taking the fractional part of the top position
         let top_char = TOP_BARS[(y.fract() * 8.0).round() as usize];
         let bottom_char = BOTTOM_BARS[(y.fract() * 8.0).round() as usize];
