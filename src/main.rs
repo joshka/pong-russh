@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
-    io::Write,
+    io::{self, Write},
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 
 use async_trait::async_trait;
-use color_eyre::eyre::Context;
-use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal, Viewport};
+use delegate::delegate;
+use ratatui::{backend::WindowSize, layout::Size, prelude::*};
 use russh::{
     server::{Auth, Config, Handle, Handler, Msg, Server, Session},
     Channel, ChannelId, Pty,
@@ -17,7 +17,8 @@ use russh_keys::key::{KeyPair, PublicKey};
 
 use game::Game;
 use tokio::{sync::Mutex, time::sleep};
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument, level_filters::LevelFilter};
+use tracing_subscriber::EnvFilter;
 mod ball;
 mod game;
 mod paddle;
@@ -25,18 +26,89 @@ mod physics;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    tracing_subscriber::fmt::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?),
-        )
-        .init();
     color_eyre::install()?;
+    init_tracing()?;
     let mut server = AppServer::new();
     server.run().await?;
     Ok(())
 }
 
-type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
+fn init_tracing() -> color_eyre::Result<()> {
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env()?
+        .add_directive("pong_russh=debug".parse()?);
+    tracing_subscriber::fmt()
+        .compact()
+        .with_env_filter(filter)
+        .init();
+    debug!("Tracing initialized");
+    Ok(())
+}
+
+pub type SshTerminal = Terminal<SshBackend>;
+
+/// A backend that writes to an SSH terminal.
+///
+/// This backend is a wrapper around the crossterm backend that writes to a terminal handle. It
+/// delegates most of the methods to the inner crossterm backend, but overrides the methods related
+/// to the terminal size and window size.
+#[derive(Debug)]
+pub struct SshBackend {
+    inner: CrosstermBackend<TerminalHandle>,
+    size: Rect,
+    window_size: WindowSize,
+}
+
+impl SshBackend {
+    pub fn new(
+        channel_id: ChannelId,
+        session_handle: Handle,
+        col_width: u32,
+        row_height: u32,
+        pix_width: u32,
+        pix_height: u32,
+    ) -> Self {
+        let terminal_handle = TerminalHandle::new(channel_id, session_handle);
+        let size = Rect::new(0, 0, col_width as u16, row_height as u16);
+        let window_size = WindowSize {
+            columns_rows: Size::new(col_width as u16, row_height as u16),
+            pixels: Size::new(pix_width as u16, pix_height as u16),
+        };
+        Self {
+            inner: CrosstermBackend::new(terminal_handle),
+            size,
+            window_size,
+        }
+    }
+}
+
+impl Backend for SshBackend {
+    delegate! {
+        to self.inner {
+            fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+            where
+                I: Iterator<Item = (u16, u16, &'a ratatui::prelude::buffer::Cell)>;
+
+            fn hide_cursor(&mut self) -> std::io::Result<()>;
+            fn show_cursor(&mut self) -> std::io::Result<()>;
+            fn get_cursor(&mut self) -> std::io::Result<(u16, u16)>;
+            fn set_cursor(&mut self, x: u16, y: u16) -> std::io::Result<()>;
+            fn clear(&mut self) -> std::io::Result<()>;
+
+        }
+    }
+    // can't delegate as there is a conflict with the `Write` trait
+    fn flush(&mut self) -> io::Result<()> {
+        Backend::flush(&mut self.inner)
+    }
+    fn size(&self) -> io::Result<Rect> {
+        Ok(self.size)
+    }
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        Ok(self.window_size)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct AppServer {
@@ -121,49 +193,35 @@ impl AppHandler {
 impl Handler for AppHandler {
     type Error = color_eyre::Report;
 
+    #[instrument(skip(self, _public_key), err)]
     async fn auth_publickey(
         &mut self,
         _user: &str,
         _public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
+        info!(client_id = ?self.client_id, "Authenticating client");
         Ok(Auth::Accept)
     }
 
+    #[instrument(skip(self, _session), err)]
     async fn channel_open_session(
         &mut self,
-        channel: Channel<Msg>,
-        session: &mut Session,
+        _channel: Channel<Msg>,
+        _session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        info!("Opening session for client {}", self.client_id);
-        let terminal_handle = TerminalHandle {
-            handle: session.handle(),
-            sink: Vec::new(),
-            channel_id: channel.id(),
-        };
-        let backend = CrosstermBackend::new(terminal_handle);
-        let initial_viewport = Rect::new(0, 0, 85, 25);
-        let terminal = Terminal::with_options(
-            backend,
-            ratatui::TerminalOptions {
-                viewport: Viewport::Fixed(initial_viewport),
-            },
-        )?;
-
-        let mut terminals = self.terminals.lock().await;
-        terminals.insert(self.client_id, terminal);
-
+        info!(client_id = ?self.client_id, "Opening session");
         let mut game = self.game.lock().await;
         game.connect_player(self.client_id)?;
-
         Ok(true)
     }
 
+    #[instrument(skip(self, _session), err)]
     async fn channel_close(
         &mut self,
         _channel: ChannelId,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        info!("Closing session for client {}", self.client_id);
+        info!(client_id = ?self.client_id, "Closing session");
         self.game.lock().await.disconnect_player(self.client_id);
         self.terminals.lock().await.remove(&self.client_id);
         Ok(())
@@ -171,14 +229,14 @@ impl Handler for AppHandler {
 
     async fn data(
         &mut self,
-        channel: ChannelId,
+        channel_id: ChannelId,
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         match data {
             // Pressing 'q' closes the connection.
             b"q" => {
-                session.close(channel);
+                session.close(channel_id);
             }
             // Pressing 'c' resets the counter for the app.
             // Every client sees the counter reset.
@@ -190,45 +248,56 @@ impl Handler for AppHandler {
         Ok(())
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(skip(self, _modes, session), err)]
     async fn pty_request(
         &mut self,
-        _channel: ChannelId,
+        channel_id: ChannelId,
         term: &str,
         col_width: u32,
         row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
+        pix_width: u32,
+        pix_height: u32,
         _modes: &[(Pty, u32)],
-        _session: &mut Session,
+        session: &mut Session,
     ) -> Result<(), Self::Error> {
-        info!(client_id = ?self.client_id, ?term, ?col_width, ?row_height, "PTY request");
-        let size = Rect::new(0, 0, col_width as u16, row_height as u16);
-        self.game.lock().await.resize(self.client_id, size);
+        info!(client_id = ?self.client_id, "Creating terminal");
+        let terminal = Terminal::new(SshBackend::new(
+            channel_id,
+            session.handle(),
+            col_width,
+            row_height,
+            pix_width,
+            pix_height,
+        ))?;
+        let mut terminals = self.terminals.lock().await;
+        terminals.insert(self.client_id, terminal);
+
         Ok(())
     }
 
     /// The client's pseudo-terminal window size has changed.
+    #[instrument(skip(self, session), err)]
     async fn window_change_request(
         &mut self,
-        _: ChannelId,
+        channel_id: ChannelId,
         col_width: u32,
         row_height: u32,
-        _: u32,
-        _: u32,
-        _: &mut Session,
+        pix_width: u32,
+        pix_height: u32,
+        session: &mut Session,
     ) -> Result<(), Self::Error> {
-        info!(
-            "Resizing terminal for client {} to {}x{}",
-            self.client_id, col_width, row_height
-        );
-        let area = Rect::new(0, 0, col_width as u16, row_height as u16);
+        info!(client_id = ?self.client_id, "Resizing terminal");
+        let terminal = Terminal::new(SshBackend::new(
+            channel_id,
+            session.handle(),
+            col_width,
+            row_height,
+            pix_width,
+            pix_height,
+        ))?;
         let mut terminals = self.terminals.lock().await;
-        if let Some(terminal) = terminals.get_mut(&self.client_id) {
-            terminal
-                .resize(area)
-                .wrap_err("Failed to resize terminal")?;
-        }
+        terminals.insert(self.client_id, terminal);
+
         Ok(())
     }
 }
@@ -236,9 +305,19 @@ impl Handler for AppHandler {
 #[derive(Clone)]
 pub struct TerminalHandle {
     handle: Handle,
+    channel_id: ChannelId,
     // The sink collects the data which is finally flushed to the handle.
     sink: Vec<u8>,
-    channel_id: ChannelId,
+}
+
+impl TerminalHandle {
+    pub fn new(channel_id: ChannelId, handle: Handle) -> Self {
+        Self {
+            handle,
+            channel_id,
+            sink: Vec::new(),
+        }
+    }
 }
 
 impl std::fmt::Debug for TerminalHandle {
@@ -253,12 +332,12 @@ impl std::fmt::Debug for TerminalHandle {
 
 // The crossterm backend writes to the terminal handle.
 impl Write for TerminalHandle {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.sink.extend_from_slice(buf);
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> io::Result<()> {
         let handle = self.handle.clone();
         let channel_id = self.channel_id;
         let data = self.sink.clone().into();

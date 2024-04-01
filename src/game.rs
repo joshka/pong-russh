@@ -18,7 +18,6 @@ pub struct Game {
     serve_time: Option<Instant>,
     last_update: Option<Instant>,
     clients: [Option<usize>; 2],
-    terminal_sizes: [Rect; 2],
 }
 
 impl Game {
@@ -34,7 +33,6 @@ impl Game {
             serve_time: None,
             last_update: None,
             clients: [None, None],
-            terminal_sizes: [Rect::default(), Rect::default()],
         }
     }
 
@@ -63,23 +61,8 @@ impl Game {
         }
     }
 
-    pub fn resize(&mut self, client_id: usize, size: Rect) {
-        if self.clients[0]
-            .as_ref()
-            .map_or(false, |id| *id == client_id)
-        {
-            self.terminal_sizes[0] = size;
-        } else if self.clients[1]
-            .as_ref()
-            .map_or(false, |id| *id == client_id)
-        {
-            self.terminal_sizes[1] = size;
-        }
-    }
-
     pub fn draw(&mut self, terminal: &mut SshTerminal) -> color_eyre::Result<()> {
-        let size = self.terminal_sizes[0].intersection(self.terminal_sizes[1]);
-        terminal.draw(|frame| frame.render_widget_ref(self, size))?;
+        terminal.draw(|frame| frame.render_widget_ref(self, frame.size()))?;
         Ok(())
     }
 
