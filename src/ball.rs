@@ -13,6 +13,12 @@ pub struct Ball {
     pub vel: Velocity,
 }
 
+impl Default for Ball {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Ball {
     const DEFAULT_INITIAL_VELOCITY: Velocity = Velocity::new(0.26, -0.23);
 
@@ -69,19 +75,18 @@ impl Ball {
                 let index = ((angle * 3.0).round() as i32 + 3) as usize;
                 self.vel.y = Velocity::VALID_Y[index];
             }
-        } else if self.pos.x > 1.0 {
-            if (player2.pos.y - Paddle::HEIGHT / 2.0 < self.pos.y)
-                && (self.pos.y < player2.pos.y + Paddle::HEIGHT / 2.0)
-            {
-                self.pos.x = 2.0 - self.pos.x;
-                self.vel.x = -self.vel.x;
+        } else if self.pos.x > 1.0
+            && (player2.pos.y - Paddle::HEIGHT / 2.0 < self.pos.y)
+            && (self.pos.y < player2.pos.y + Paddle::HEIGHT / 2.0)
+        {
+            self.pos.x = 2.0 - self.pos.x;
+            self.vel.x = -self.vel.x;
 
-                let distance = self.pos.y - player2.pos.y;
-                let angle = distance / (Paddle::HEIGHT / 2.0);
-                // map onto the range of valid vertical velocities
-                let index = ((angle * 3.0).round() as i32 + 3) as usize;
-                self.vel.y = Velocity::VALID_Y[index];
-            }
+            let distance = self.pos.y - player2.pos.y;
+            let angle = distance / (Paddle::HEIGHT / 2.0);
+            // map onto the range of valid vertical velocities
+            let index = ((angle * 3.0).round() as i32 + 3) as usize;
+            self.vel.y = Velocity::VALID_Y[index];
         }
     }
 }

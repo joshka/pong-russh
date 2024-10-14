@@ -20,6 +20,12 @@ pub struct Game {
     clients: [Option<usize>; 2],
 }
 
+impl Default for Game {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Game {
     // Wait for a fixed duration before serving the ball
     const SERVE_DURATION: Duration = Duration::from_millis(1500);
@@ -62,7 +68,7 @@ impl Game {
     }
 
     pub fn draw(&mut self, terminal: &mut SshTerminal) -> color_eyre::Result<()> {
-        terminal.draw(|frame| frame.render_widget_ref(self, frame.size()))?;
+        terminal.draw(|frame| frame.render_widget_ref(self, frame.area()))?;
         Ok(())
     }
 

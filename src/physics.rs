@@ -19,7 +19,7 @@ impl Point {
     /// Convert a point in the game world to a point on the screen.
     ///
     /// Screen coordinates are in the range [0, width] and [0, height].
-    pub fn to_screen(&self, area: Rect) -> Position {
+    pub fn to_screen(self, area: Rect) -> Position {
         // ensure that the resulting position is within the screen bounds
         let max_width = (area.width.saturating_sub(1)) as f32;
         let max_height = (area.height.saturating_sub(1)) as f32;

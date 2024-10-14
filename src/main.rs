@@ -8,7 +8,11 @@ use std::{
 
 use async_trait::async_trait;
 use delegate::delegate;
-use ratatui::{backend::WindowSize, layout::Size, prelude::*};
+use ratatui::{
+    backend::{Backend, CrosstermBackend, WindowSize},
+    layout::Size,
+    Terminal,
+};
 use russh::{
     server::{Auth, Config, Handle, Handler, Msg, Server, Session},
     Channel, ChannelId, Pty,
@@ -56,7 +60,7 @@ pub type SshTerminal = Terminal<SshBackend>;
 #[derive(Debug)]
 pub struct SshBackend {
     inner: CrosstermBackend<TerminalHandle>,
-    size: Rect,
+    size: Size,
     window_size: WindowSize,
 }
 
@@ -70,7 +74,7 @@ impl SshBackend {
         pix_height: u32,
     ) -> Self {
         let terminal_handle = TerminalHandle::new(channel_id, session_handle);
-        let size = Rect::new(0, 0, col_width as u16, row_height as u16);
+        let size = Size::new(col_width as u16, row_height as u16);
         let window_size = WindowSize {
             columns_rows: Size::new(col_width as u16, row_height as u16),
             pixels: Size::new(pix_width as u16, pix_height as u16),
@@ -86,14 +90,19 @@ impl SshBackend {
 impl Backend for SshBackend {
     delegate! {
         to self.inner {
+            #[allow(late_bound_lifetime_arguments)]
             fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
             where
                 I: Iterator<Item = (u16, u16, &'a ratatui::prelude::buffer::Cell)>;
 
             fn hide_cursor(&mut self) -> std::io::Result<()>;
             fn show_cursor(&mut self) -> std::io::Result<()>;
+            #[allow(deprecated)]
             fn get_cursor(&mut self) -> std::io::Result<(u16, u16)>;
+            #[allow(deprecated)]
             fn set_cursor(&mut self, x: u16, y: u16) -> std::io::Result<()>;
+            fn get_cursor_position(&mut self) -> io::Result<ratatui::prelude::Position> ;
+            fn set_cursor_position<P: Into<ratatui::prelude::Position>>(&mut self, position: P) -> io::Result<()> ;
             fn clear(&mut self) -> std::io::Result<()>;
 
         }
@@ -102,7 +111,7 @@ impl Backend for SshBackend {
     fn flush(&mut self) -> io::Result<()> {
         Backend::flush(&mut self.inner)
     }
-    fn size(&self) -> io::Result<Rect> {
+    fn size(&self) -> io::Result<Size> {
         Ok(self.size)
     }
     fn window_size(&mut self) -> io::Result<WindowSize> {
@@ -147,7 +156,7 @@ impl AppServer {
             ..Default::default()
         });
 
-        let addr = Ipv4Addr::UNSPECIFIED;
+        let addr = Ipv4Addr::LOCALHOST;
         let port = 2222;
         info!("Listening on {}:{}", addr, port);
         self.run_on_address(config, (addr, port)).await?;
@@ -350,5 +359,35 @@ impl Write for TerminalHandle {
 
         self.sink.clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::server::Handler;
+    use russh_keys::key::KeyPair;
+
+    #[tokio::test]
+    async fn test_auth() {
+        // JM 2024-10-14 I don't recall what this part of this test was supposed to do.
+        // let config = Arc::new(Config {
+        //     inactivity_timeout: Some(Duration::from_secs(3600)),
+        //     auth_rejection_time: Duration::from_secs(3),
+        //     auth_rejection_time_initial: Some(Duration::from_secs(0)),
+        //     keys: vec![KeyPair::generate_ed25519().unwrap()],
+        //     ..Default::default()
+        // });
+
+        // let addr = Ipv4Addr::UNSPECIFIED;
+        // let port = 2222;
+        let mut server = AppServer::new();
+        let mut handler = server.new_client(None);
+        let public_key = KeyPair::generate_ed25519()
+            .unwrap()
+            .clone_public_key()
+            .unwrap();
+        let result = handler.auth_publickey("test", &public_key);
+        assert_eq!(result.await.unwrap(), Auth::Accept);
     }
 }
