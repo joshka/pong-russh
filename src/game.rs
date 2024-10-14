@@ -3,11 +3,11 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::bail;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Clear, WidgetRef},
+    widgets::{Block, Clear},
 };
 use tracing::info;
 
-use crate::{ball::Ball, paddle::Paddle, SshTerminal};
+use crate::{ball::Ball, paddle::Paddle, server::SshTerminal};
 
 #[derive(Debug)]
 pub struct Game {
@@ -68,7 +68,7 @@ impl Game {
     }
 
     pub fn draw(&mut self, terminal: &mut SshTerminal) -> color_eyre::Result<()> {
-        terminal.draw(|frame| frame.render_widget_ref(self, frame.area()))?;
+        terminal.draw(|frame| frame.render_widget(self, frame.area()))?;
         Ok(())
     }
 
@@ -129,8 +129,8 @@ impl Game {
     }
 }
 
-impl WidgetRef for &mut Game {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+impl Widget for &mut Game {
+    fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let block = Block::bordered()
             .title("Pong")
