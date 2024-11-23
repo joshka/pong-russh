@@ -8,10 +8,10 @@ use std::{
 use async_trait::async_trait;
 use ratatui::Terminal;
 use russh::{
+    keys::key::{KeyPair, PublicKey},
     server::{Auth, Config, Handler, Msg, Server, Session},
     Channel, ChannelId, Pty,
 };
-use russh_keys::key::{KeyPair, PublicKey};
 use tokio::{sync::Mutex, time::sleep};
 use tracing::{info, instrument};
 
@@ -52,7 +52,7 @@ impl AppServer {
             inactivity_timeout: Some(Duration::from_secs(3600)),
             auth_rejection_time: Duration::from_secs(3),
             auth_rejection_time_initial: Some(Duration::from_secs(0)),
-            keys: vec![KeyPair::generate_ed25519().unwrap()],
+            keys: vec![KeyPair::generate_ed25519()],
             ..Default::default()
         });
 
@@ -214,8 +214,7 @@ impl Handler for AppHandler {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use russh::server::Handler;
-    use russh_keys::key::KeyPair;
+    use russh::{keys::key::KeyPair, server::Handler};
 
     #[tokio::test]
     async fn test_auth() {
@@ -232,10 +231,7 @@ pub mod tests {
         // let port = 2222;
         let mut server = AppServer::new();
         let mut handler = server.new_client(None);
-        let public_key = KeyPair::generate_ed25519()
-            .unwrap()
-            .clone_public_key()
-            .unwrap();
+        let public_key = KeyPair::generate_ed25519().clone_public_key().unwrap();
         let result = handler.auth_publickey("test", &public_key);
         assert_eq!(result.await.unwrap(), Auth::Accept);
     }
