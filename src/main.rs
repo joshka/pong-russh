@@ -1,3 +1,4 @@
+use color_eyre::Result;
 use tracing::{debug, level_filters::LevelFilter};
 use tracing_subscriber::EnvFilter;
 
@@ -9,15 +10,15 @@ mod physics;
 mod server;
 
 #[tokio::main]
-async fn main() -> color_eyre::Result<()> {
+async fn main() -> Result<()> {
     color_eyre::install()?;
     init_tracing()?;
-    let mut server = server::AppServer::new();
+    let mut server = server::AppServer::new()?;
     server.run().await?;
     Ok(())
 }
 
-fn init_tracing() -> color_eyre::Result<()> {
+fn init_tracing() -> Result<()> {
     let filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env()?

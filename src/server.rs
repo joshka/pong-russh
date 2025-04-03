@@ -5,11 +5,15 @@ use std::{
     time::Duration,
 };
 
+use color_eyre::{
+    eyre::{Context, OptionExt},
+    Result,
+};
 use ratatui::Terminal;
 use russh::{
     keys::{
-        ssh_key::{self, rand_core::OsRng},
-        PublicKey,
+        ssh_key::{rand_core::OsRng, Algorithm, LineEnding},
+        PrivateKey, PublicKey,
     },
     server::{Auth, Config, Handler, Msg, Server, Session},
     Channel, ChannelId, Pty,
@@ -26,18 +30,21 @@ pub struct AppServer {
     client_counter: usize,
     game: Arc<Mutex<Game>>,
     terminals: Arc<Mutex<HashMap<usize, SshTerminal>>>,
+    key: PrivateKey,
 }
 
 impl AppServer {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self> {
+        let key = load_or_generate_key()?;
+        Ok(Self {
             client_counter: 0,
             game: Arc::new(Mutex::new(Game::new())),
             terminals: Arc::new(Mutex::new(HashMap::new())),
-        }
+            key,
+        })
     }
 
-    pub async fn run(&mut self) -> color_eyre::Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         let game = self.game.clone();
         let terminals = self.terminals.clone();
         tokio::spawn(async move {
@@ -50,13 +57,11 @@ impl AppServer {
             }
         });
 
-        let key = russh::keys::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap();
-
         let config = Arc::new(Config {
             inactivity_timeout: Some(Duration::from_secs(3600)),
             auth_rejection_time: Duration::from_secs(3),
             auth_rejection_time_initial: Some(Duration::from_secs(0)),
-            keys: vec![key],
+            keys: vec![self.key.clone()],
             ..Default::default()
         });
 
@@ -66,6 +71,30 @@ impl AppServer {
         self.run_on_address(config, (addr, port)).await?;
         Ok(())
     }
+}
+
+fn load_or_generate_key() -> Result<PrivateKey> {
+    let path = dirs::config_local_dir()
+        .ok_or_eyre("Failed to get config local dir")?
+        .join("pong_russh")
+        .join("host_key");
+    let key = if path.exists() {
+        info!("Loading host key from {}", path.display());
+        PrivateKey::read_openssh_file(&path).wrap_err("Failed to read host key from file")?
+    } else {
+        info!(
+            "Host key not found at {}. Generating new host key",
+            path.display()
+        );
+        let key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)
+            .wrap_err("Failed to generate host key")?;
+        std::fs::create_dir_all(path.parent().unwrap())
+            .wrap_err("Failed to create directory for host key")?;
+        key.write_openssh_file(&path, LineEnding::LF)
+            .wrap_err("Failed to write host key to file")?;
+        key
+    };
+    Ok(key)
 }
 
 impl Server for AppServer {
@@ -225,7 +254,7 @@ pub mod tests {
         let key = PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap();
         let public_key = key.public_key();
         let addr = None;
-        let mut handler = AppServer::new().new_client(addr);
+        let mut handler = AppServer::new().unwrap().new_client(addr);
         let result = handler.auth_publickey("test", &public_key);
         assert_eq!(result.await.unwrap(), Auth::Accept);
     }
