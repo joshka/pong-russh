@@ -5,10 +5,12 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use ratatui::Terminal;
 use russh::{
-    keys::key::{KeyPair, PublicKey},
+    keys::{
+        ssh_key::{self, rand_core::OsRng},
+        PublicKey,
+    },
     server::{Auth, Config, Handler, Msg, Server, Session},
     Channel, ChannelId, Pty,
 };
@@ -48,11 +50,13 @@ impl AppServer {
             }
         });
 
+        let key = russh::keys::PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap();
+
         let config = Arc::new(Config {
             inactivity_timeout: Some(Duration::from_secs(3600)),
             auth_rejection_time: Duration::from_secs(3),
             auth_rejection_time_initial: Some(Duration::from_secs(0)),
-            keys: vec![KeyPair::generate_ed25519()],
+            keys: vec![key],
             ..Default::default()
         });
 
@@ -98,7 +102,6 @@ impl AppHandler {
     }
 }
 
-#[async_trait]
 impl Handler for AppHandler {
     type Error = color_eyre::Report;
 
@@ -145,7 +148,7 @@ impl Handler for AppHandler {
         match data {
             // Pressing 'q' closes the connection.
             b"q" => {
-                session.close(channel_id);
+                let _ = session.close(channel_id);
             }
             // Pressing 'c' resets the counter for the app.
             // Every client sees the counter reset.
@@ -213,25 +216,16 @@ impl Handler for AppHandler {
 
 #[cfg(test)]
 pub mod tests {
+    use russh::keys::PrivateKey;
+
     use super::*;
-    use russh::{keys::key::KeyPair, server::Handler};
 
     #[tokio::test]
     async fn test_auth() {
-        // JM 2024-10-14 I don't recall what this part of this test was supposed to do.
-        // let config = Arc::new(Config {
-        //     inactivity_timeout: Some(Duration::from_secs(3600)),
-        //     auth_rejection_time: Duration::from_secs(3),
-        //     auth_rejection_time_initial: Some(Duration::from_secs(0)),
-        //     keys: vec![KeyPair::generate_ed25519().unwrap()],
-        //     ..Default::default()
-        // });
-
-        // let addr = Ipv4Addr::UNSPECIFIED;
-        // let port = 2222;
-        let mut server = AppServer::new();
-        let mut handler = server.new_client(None);
-        let public_key = KeyPair::generate_ed25519().clone_public_key().unwrap();
+        let key = PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap();
+        let public_key = key.public_key();
+        let addr = None;
+        let mut handler = AppServer::new().new_client(addr);
         let result = handler.auth_publickey("test", &public_key);
         assert_eq!(result.await.unwrap(), Auth::Accept);
     }
